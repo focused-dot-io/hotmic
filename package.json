@@ -1,6 +1,6 @@
 {
   "name": "hot-mic",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Desktop app for audio transcription using Groq API and Whisper model",
   "type": "module",
   "main": "src/main.js",
@@ -15,13 +15,24 @@
   "author": "",
   "license": "MIT",
   "devDependencies": {
-    "electron": "*",
-    "electron-builder": "*"
+    "electron": "^35.0.3",
+    "electron-builder": "^25.1.8"
   },
   "dependencies": {
-    "electron-store": "*",
-    "form-data": "*",
-    "undici": "*"
+    "electron-store": "^8.1.0",
+    "form-data": "^4.0.0",
+    "undici": "^6.10.1"
+  },
+  "overrides": {
+    "inflight": "^2.0.0",
+    "rimraf": "^5.0.5",
+    "glob": "^10.3.10",
+    "@npmcli/move-file": "^3.0.0",
+    "@npmcli/fs": "^3.1.0",
+    "npmlog": "^7.0.1",
+    "are-we-there-yet": "^4.0.2",
+    "gauge": "^5.0.2",
+    "boolean": "^4.0.0"
   },
   "build": {
     "appId": "com.hotmic.app",
@@ -53,7 +64,11 @@
     }
   },
   "os": [
-    "darwin"
+    "darwin",
+    "win32"
+  ],
+  "cpu": [
+    "x64"
   ],
   "engines": {
     "node": ">=18.0.0"

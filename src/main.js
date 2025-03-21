@@ -7,9 +7,17 @@
  * - Communication with renderer processes
  * - Global shortcuts
  * - Tray icon
+ *
+ * CROSS-PLATFORM NOTES:
+ * This application supports both macOS and Windows, but some features are macOS-specific:
+ * - Dock icon management (show/hide in dock)
+ * - macOS-specific window styling (titleBarStyle, vibrancy, visualEffectState)
+ *
+ * All macOS-specific code is marked with "MACOS SPECIFIC" comments and guarded
+ * by the isMacOS constant (process.platform === 'darwin').
  */
 
-import { app, BrowserWindow, ipcMain, globalShortcut, Menu, Tray, clipboard, nativeImage, screen } from 'electron';
+import { app, BrowserWindow, ipcMain, globalShortcut, Menu, Tray, clipboard, nativeImage, screen, safeStorage } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import https from 'node:https';
@@ -23,6 +31,12 @@ import { fetch } from 'undici';
 // Fix __dirname and __filename which aren't available in ESM
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+/**
+ * Platform Detection
+ */
+// Detect if we're running on macOS
+const isMacOS = process.platform === 'darwin';
 
 /**
  * Application Configuration
@@ -52,19 +66,42 @@ let audioData = [];
  * History Management
  */
 function cleanupOldHistory() {
+  // Skip if history is disabled
+  if (!store.get('historyEnabled', true)) return [];
+
   const history = store.get('history', []);
   const thirtyDaysAgo = Date.now() - (30 * 24 * 60 * 60 * 1000);
   const newHistory = history.filter(item => item.timestamp > thirtyDaysAgo);
   store.set('history', newHistory);
+  return newHistory;
 }
 
 function addToHistory(rawText, processedText) {
+  // Skip if history is disabled
+  if (!store.get('historyEnabled', true)) return;
+
   const history = store.get('history', []);
+
+  // Encrypt the transcript data if encryption is available
+  let encryptedRawText = rawText;
+  let encryptedProcessedText = processedText;
+
+  if (safeStorage.isEncryptionAvailable()) {
+    try {
+      encryptedRawText = safeStorage.encryptString(rawText).toString('base64');
+      encryptedProcessedText = safeStorage.encryptString(processedText).toString('base64');
+    } catch (error) {
+      console.error('Error encrypting history data:', error);
+    }
+  }
+
   history.unshift({
     timestamp: Date.now(),
-    rawText,
-    processedText
+    rawText: encryptedRawText,
+    processedText: encryptedProcessedText,
+    encrypted: safeStorage.isEncryptionAvailable()
   });
+
   store.set('history', history);
 
   // Notify renderer of history update
@@ -73,6 +110,44 @@ function addToHistory(rawText, processedText) {
   }
 
   cleanupOldHistory();
+}
+
+function clearHistory() {
+  store.set('history', []);
+  // Notify renderer of history update
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('history-updated');
+  }
+  return true;
+}
+
+function getHistory() {
+  const history = cleanupOldHistory();
+
+  // If encryption is available, decrypt the history items
+  if (safeStorage.isEncryptionAvailable()) {
+    return history.map(item => {
+      try {
+        if (item.encrypted) {
+          return {
+            timestamp: item.timestamp,
+            rawText: safeStorage.decryptString(Buffer.from(item.rawText, 'base64')),
+            processedText: safeStorage.decryptString(Buffer.from(item.processedText, 'base64'))
+          };
+        }
+        return item;
+      } catch (error) {
+        console.error('Error decrypting history item:', error);
+        return {
+          timestamp: item.timestamp,
+          rawText: 'Error: Could not decrypt transcript',
+          processedText: 'Error: Could not decrypt transcript'
+        };
+      }
+    });
+  }
+
+  return history;
 }
 
 /**
@@ -85,7 +160,7 @@ async function postProcessTranscript(text) {
   }
 
   const promptSettings = store.get('promptSettings', {
-    enabled: true,
+    enabled: false,
     prompt: DEFAULT_PROMPT
   });
 
@@ -292,11 +367,12 @@ function createTray() {
     // Create tray with template image
     tray = new Tray(trayIcon);
 
-    // Check if we're showing in the dock
-    const showingInDock = !app.dock.isVisible();
+    // MACOS SPECIFIC: Check dock visibility
+    // This is only available on macOS
+    const showingInDock = isMacOS && app.dock ? !app.dock.isVisible() : false;
 
-    // Create context menu
-    const contextMenu = Menu.buildFromTemplate([
+    // Create context menu items
+    const menuItems = [
       {
         label: 'Start/Stop Recording',
         click: toggleRecording
@@ -313,21 +389,30 @@ function createTray() {
         }
       },
       { type: 'separator' },
-      {
+    ];
+
+    // MACOS SPECIFIC: Add dock toggle option
+    // Only available on macOS
+    if (isMacOS) {
+      menuItems.push({
         label: 'Show in Dock',
         type: 'checkbox',
         checked: showingInDock,
         click: () => toggleDockVisibility()
-      },
-      { type: 'separator' },
-      {
-        label: 'Quit',
-        click: () => {
-          app.isQuitting = true;
-          app.quit();
-        }
+      });
+      menuItems.push({ type: 'separator' });
+    }
+
+    // Add quit option
+    menuItems.push({
+      label: 'Quit',
+      click: () => {
+        app.isQuitting = true;
+        app.quit();
       }
-    ]);
+    });
+
+    const contextMenu = Menu.buildFromTemplate(menuItems);
 
     tray.setToolTip('HotMic');
     tray.setContextMenu(contextMenu);
@@ -337,9 +422,13 @@ function createTray() {
 }
 
 /**
- * Toggle dock visibility
+ * Toggle dock visibility (MACOS SPECIFIC)
+ * This function only works on macOS and manages the app's visibility in the dock
  */
 function toggleDockVisibility() {
+  // Exit early if not on macOS
+  if (!isMacOS || !app.dock) return;
+
   if (app.dock.isVisible()) {
     app.dock.hide();
   } else {
@@ -348,8 +437,11 @@ function toggleDockVisibility() {
 
   // Update the tray menu after toggling
   if (tray) {
-    const showingInDock = !app.dock.isVisible();
-    const contextMenu = Menu.buildFromTemplate([
+    // MACOS SPECIFIC: Check dock visibility
+    const showingInDock = app.dock ? !app.dock.isVisible() : false;
+
+    // Create context menu items
+    const menuItems = [
       {
         label: 'Start/Stop Recording',
         click: toggleRecording
@@ -366,21 +458,29 @@ function toggleDockVisibility() {
         }
       },
       { type: 'separator' },
-      {
+    ];
+
+    // MACOS SPECIFIC: Add dock toggle option
+    if (isMacOS) {
+      menuItems.push({
         label: 'Show in Dock',
         type: 'checkbox',
         checked: showingInDock,
         click: () => toggleDockVisibility()
-      },
-      { type: 'separator' },
-      {
-        label: 'Quit',
-        click: () => {
-          app.isQuitting = true;
-          app.quit();
-        }
+      });
+      menuItems.push({ type: 'separator' });
+    }
+
+    // Add quit option
+    menuItems.push({
+      label: 'Quit',
+      click: () => {
+        app.isQuitting = true;
+        app.quit();
       }
-    ]);
+    });
+
+    const contextMenu = Menu.buildFromTemplate(menuItems);
     tray.setContextMenu(contextMenu);
   }
 }
@@ -439,13 +539,15 @@ function setupIPCHandlers() {
   });
 
   ipcMain.handle('get-shortcut', () => {
-    return store.get('shortcut') || 'Command+Shift+Space';
+    // Use platform-specific default shortcuts
+    const defaultShortcut = isMacOS ? 'Command+Shift+Space' : 'Ctrl+Shift+Space';
+    return store.get('shortcut') || defaultShortcut;
   });
 
   // Prompt settings
   ipcMain.handle('get-prompt-settings', () => {
     return store.get('promptSettings', {
-      enabled: true,
+      enabled: false,
       prompt: DEFAULT_PROMPT
     });
   });
@@ -457,8 +559,27 @@ function setupIPCHandlers() {
 
   // History management
   ipcMain.handle('get-history', () => {
-    cleanupOldHistory();
-    return store.get('history', []);
+    return getHistory();
+  });
+
+  ipcMain.handle('clear-history', () => {
+    return clearHistory();
+  });
+
+  ipcMain.handle('is-history-encrypted', () => {
+    return safeStorage.isEncryptionAvailable();
+  });
+
+  ipcMain.handle('get-history-settings', () => {
+    return {
+      enabled: store.get('historyEnabled', true),
+      encrypted: safeStorage.isEncryptionAvailable()
+    };
+  });
+
+  ipcMain.handle('set-history-enabled', (event, enabled) => {
+    store.set('historyEnabled', enabled);
+    return true;
   });
 
   // Settings window management
@@ -510,8 +631,9 @@ async function initialize() {
   await app.whenReady();
 
   try {
-    // Hide dock only if not configured to show
-    if (!store.get('showInDock', false)) {
+    // MACOS SPECIFIC: Dock visibility management
+    // Hide dock icon if not configured to show (macOS only)
+    if (isMacOS && app.dock && !store.get('showInDock', false)) {
       app.dock.hide();
     }
 
@@ -581,7 +703,8 @@ function createMainWindow() {
     show: false,
     skipTaskbar: false,
     title: 'HotMic',
-    titleBarStyle: 'hiddenInset',
+    // MACOS SPECIFIC: titleBarStyle is only used on macOS
+    titleBarStyle: isMacOS ? 'hiddenInset' : 'default',
     backgroundColor: '#00000000'
   });
 
@@ -589,14 +712,18 @@ function createMainWindow() {
 
   // Show in App Switcher when window is shown
   mainWindow.on('show', () => {
-    // Show in dock temporarily while window is open
-    app.dock.show();
+    // MACOS SPECIFIC: Show in dock when window is shown
+    // On macOS, we show the app in the dock when the settings window is open
+    if (isMacOS && app.dock && store.get('showInDock', false)) {
+      app.dock.show();
+    }
   });
 
   // Remove from App Switcher when window is hidden
   mainWindow.on('hide', () => {
-    // Hide dock if it's not meant to be visible
-    if (!store.get('showInDock', false)) {
+    // MACOS SPECIFIC: Hide dock when window is hidden
+    // On macOS, we hide the dock icon when the window is hidden (unless configured to show)
+    if (isMacOS && app.dock && !store.get('showInDock', false)) {
       app.dock.hide();
     }
   });
@@ -636,6 +763,7 @@ function createOverlayWindow() {
     x: Math.floor(width / 2 - 150),
     y: Math.floor(height / 2 - 150),
     frame: false,
+    // Note: transparent works on both platforms but has better results on macOS
     transparent: true,
     backgroundColor: '#00000000',
     opacity: 1.0,
@@ -644,9 +772,8 @@ function createOverlayWindow() {
     skipTaskbar: true,
     alwaysOnTop: true,
     show: false,
-    frame: false,
-    vibrancy: null,
-    visualEffectState: 'active',
+    vibrancy: isMacOS ? null : undefined,
+    visualEffectState: isMacOS ? 'active' : undefined,
     webPreferences: {
       preload: path.join(__dirname, 'preload.mjs'),
       contextIsolation: true,

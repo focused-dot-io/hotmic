@@ -22,6 +22,12 @@ contextBridge.exposeInMainWorld('api', {
   getHistory: () => ipcRenderer.invoke('get-history'),
   openSettings: () => ipcRenderer.invoke('open-settings'),
 
+  // History management
+  clearHistory: () => ipcRenderer.invoke('clear-history'),
+  isHistoryEncrypted: () => ipcRenderer.invoke('is-history-encrypted'),
+  getHistorySettings: () => ipcRenderer.invoke('get-history-settings'),
+  setHistoryEnabled: (enabled) => ipcRenderer.invoke('set-history-enabled', enabled),
+
   // Recording functionality
   sendAudioData: (buffer) => ipcRenderer.invoke('audio-data', buffer),
   sendAudioLevel: (level) => ipcRenderer.invoke('audio-level', level),

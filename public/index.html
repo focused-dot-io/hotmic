@@ -415,6 +415,7 @@
       text-overflow: ellipsis;
       display: -webkit-box;
       -webkit-line-clamp: 2;
+      line-clamp: 2;
       -webkit-box-orient: vertical;
     }
 
@@ -534,6 +535,17 @@
       cursor: not-allowed;
       pointer-events: none;
     }
+
+    button.danger {
+      background: #ff3b30;
+      border-color: #ff3b30;
+      color: white;
+      font-weight: 600;
+    }
+
+    button.danger:hover {
+      filter: brightness(1.1);
+    }
   </style>
 </head>
 
@@ -573,9 +585,11 @@
             <li>Press the global shortcut to show the recording overlay</li>
             <li>Speak into your microphone</li>
             <li>Press the shortcut again to stop recording</li>
-            <li>Wait for transcription and processing</li>
-            <li>Processed text will be copied to clipboard</li>
+            <li>Wait for transcription</li>
+            <li>The transcribed text will be copied to your clipboard</li>
+            <li>If post-processing is enabled, you'll get the formatted text; otherwise, you'll get the raw transcript</li>
           </ol>
+          <p style="margin-top: var(--spacing-sm); color: var(--secondary-text); font-size: 13px;"><strong>Note:</strong> A Groq API key is required for the application to work. Post-processing (text formatting) is optional and can be enabled or disabled.</p>
         </div>
       </div>
 
@@ -588,14 +602,23 @@
             <input type="password" id="apiKey" placeholder="Enter your Groq API key">
             <button id="saveApiKey" class="primary">Save</button>
           </div>
+          <div class="api-note" style="margin: var(--spacing-sm) 0; color: var(--secondary-text); font-size: 13px;">
+            <strong>Note:</strong> The Groq API key is required for all audio transcriptions.
+          </div>
           <div id="apiKeyStatus" class="status"></div>
         </div>
 
         <div class="form-group">
           <h3>Post-Processing</h3>
           <div class="checkbox-group">
-            <input type="checkbox" id="enablePostProcessing" checked>
+            <input type="checkbox" id="enablePostProcessing">
             <label for="enablePostProcessing">Enable post-processing with Groq LLM</label>
+          </div>
+          <div class="description-box" style="margin: var(--spacing-sm) 0; padding: var(--spacing-sm); background: rgba(0, 0, 0, 0.05); border-radius: var(--radius-sm); font-size: 13px;">
+            <strong>What is post-processing?</strong>
+            <p>Post-processing is an optional feature that enhances your transcription. The basic transcription already provides the raw text from the Whisper model.</p>
+            <p>When post-processing is enabled, your raw transcript is sent to Groq's LLM with the prompt below to format and enhance it. The processed version is what gets copied to your clipboard, not the raw transcript.</p>
+            <p>To get the raw transcript instead, either disable post-processing or modify the prompt to: "Return the transcript exactly as provided with no changes."</p>
           </div>
           <div id="promptSection">
             <label for="prompt">Processing Prompt:</label>
@@ -611,6 +634,16 @@
       <div class="tab-panel" id="history-panel">
         <div class="history-layout">
           <div class="history-sidebar">
+            <div class="history-controls" style="padding: var(--spacing-md); display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--separator);">
+              <div class="checkbox-group">
+                <input type="checkbox" id="historyEnabled" checked>
+                <label for="historyEnabled">Enable History</label>
+              </div>
+              <button id="clearHistory" class="danger">Clear History</button>
+            </div>
+            <div class="history-encryption-status" style="padding: var(--spacing-sm) var(--spacing-md); font-size: 12px; color: var(--secondary-text); display: flex; align-items: center; gap: var(--spacing-xs); border-bottom: 1px solid var(--separator);">
+              <span id="encryptionStatus"></span>
+            </div>
             <div class="history-list" id="historyList">
               <!-- History items will be inserted here -->
             </div>
@@ -625,7 +658,7 @@
     </div>
 
     <footer>
-      <p>HotMic v1.0.0</p>
+      <p>HotMic v0.0.2</p>
     </footer>
   </div>
 
@@ -654,7 +687,13 @@
       enablePostProcessing: document.getElementById('enablePostProcessing'),
       prompt: document.getElementById('prompt'),
       resetPrompt: document.getElementById('resetPrompt'),
-      promptStatus: document.getElementById('promptStatus')
+      promptStatus: document.getElementById('promptStatus'),
+
+      // History elements
+      historyEnabled: document.getElementById('historyEnabled'),
+      clearHistory: document.getElementById('clearHistory'),
+      encryptionStatus: document.getElementById('encryptionStatus'),
+      historyList: document.getElementById('historyList')
     };
 
     // Application state
@@ -673,6 +712,7 @@
         await loadApiKey();
         await loadShortcut();
         await loadPromptSettings();
+        await loadHistorySettings();
         await loadHistory();
       } catch (error) {
         console.error('Error loading settings:', error);
@@ -719,14 +759,13 @@
     async function saveApiKey() {
       const apiKey = elements.apiKeyInput.value.trim();
 
-      if (!apiKey) {
-        showStatus(elements.apiKeyStatus, 'Please enter an API key', 'error');
-        return;
-      }
-
       try {
         await window.api.setApiKey(apiKey);
-        showStatus(elements.apiKeyStatus, 'API key saved successfully', 'success');
+        if (apiKey) {
+          showStatus(elements.apiKeyStatus, 'API key saved successfully', 'success');
+        } else {
+          showStatus(elements.apiKeyStatus, 'API key removed', 'success');
+        }
       } catch (error) {
         showStatus(elements.apiKeyStatus, `Error saving API key: ${error.message}`, 'error');
       }
@@ -892,8 +931,12 @@
     // Load and display history
     async function loadHistory() {
       const history = await window.api.getHistory();
-      const historyList = document.getElementById('historyList');
-      historyList.innerHTML = '';
+      elements.historyList.innerHTML = '';
+
+      if (history.length === 0) {
+        elements.historyList.innerHTML = '<div style="padding: var(--spacing-md); color: var(--secondary-text);">No history items</div>';
+        return;
+      }
 
       history.forEach(item => {
         const div = document.createElement('div');
@@ -908,7 +951,7 @@
           <div class="preview">${preview.substring(0, 100)}${preview.length > 100 ? '...' : ''}</div>
         `;
 
-        historyList.appendChild(div);
+        elements.historyList.appendChild(div);
       });
     }
 
@@ -939,6 +982,24 @@
         showStatus(elements.promptStatus, 'Settings saved successfully', 'success');
       } catch (error) {
         showStatus(elements.promptStatus, `Error saving settings: ${error.message}`, 'error');
+      }
+    }
+
+    // Load history settings
+    async function loadHistorySettings() {
+      try {
+        const settings = await window.api.getHistorySettings();
+        elements.historyEnabled.checked = settings.enabled;
+
+        // Update encryption status
+        const isEncrypted = await window.api.isHistoryEncrypted();
+        if (isEncrypted) {
+          elements.encryptionStatus.innerHTML = '🔒 History is encrypted';
+        } else {
+          elements.encryptionStatus.innerHTML = '⚠️ History is not encrypted';
+        }
+      } catch (error) {
+        console.error('Error loading history settings:', error);
       }
     }
 
@@ -978,6 +1039,33 @@
 
       elements.prompt.addEventListener('change', savePromptSettings);
       elements.resetPrompt.addEventListener('click', resetPrompt);
+
+      // History settings
+      elements.historyEnabled.addEventListener('change', async () => {
+        try {
+          await window.api.setHistoryEnabled(elements.historyEnabled.checked);
+          // Reload history if enabled
+          if (elements.historyEnabled.checked) {
+            await loadHistory();
+          } else {
+            // Clear display but not actual history
+            elements.historyList.innerHTML = '<div style="padding: var(--spacing-md); color: var(--secondary-text);">History is disabled</div>';
+          }
+        } catch (error) {
+          console.error('Error saving history settings:', error);
+        }
+      });
+
+      elements.clearHistory.addEventListener('click', async () => {
+        if (confirm('Are you sure you want to clear all history? This cannot be undone.')) {
+          try {
+            await window.api.clearHistory();
+            await loadHistory();
+          } catch (error) {
+            console.error('Error clearing history:', error);
+          }
+        }
+      });
 
       // Error handling
       window.api.onShortcutError && window.api.onShortcutError((message) => {
