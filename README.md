@@ -1,13 +1,14 @@
 # HotMic
 
-A lightweight desktop application that transcribes audio using Groq's API with the Whisper-large-v3 model. While a Groq API key is required for transcription, the post-processing feature (which formats the transcription output) is optional.
+A lightweight desktop application that transcribes audio using either Groq or OpenAI APIs with the Whisper-large-v3 model. While an API key is required for transcription, the post-processing feature (which formats the transcription output) is optional.
 
 ## Features
 
 - Cross-platform support for both Windows and macOS
 - Press a global shortcut to start/stop recording (platform-specific defaults)
-- Audio transcription using Groq's Whisper API
-- Optional post-processing with Groq LLM to format transcripts
+- Audio transcription using Groq or OpenAI Whisper API
+- Multiple transcription model options (whisper-large-v3, gpt-4o-transcribe, etc.)
+- Optional post-processing with Groq or OpenAI LLM to format transcripts
 - Results are automatically copied to clipboard
 - Visual feedback during recording and processing
 - Configurable keyboard shortcut
@@ -29,10 +30,13 @@ A lightweight desktop application that transcribes audio using Groq's API with t
 
 ## Configuration
 
-1. Sign up for a Groq API account at [https://console.groq.com](https://console.groq.com)
-2. Get an API key (required for transcription)
+1. Choose a provider for speech-to-text (Groq or OpenAI)
+2. Get an API key from your chosen provider:
+   - For Groq, sign up at [https://console.groq.com](https://console.groq.com)
+   - For OpenAI, sign up at [https://platform.openai.com](https://platform.openai.com)
 3. Enter your API key in the app settings
-4. (Optional) Enable post-processing to format transcripts
+4. Select your preferred transcription model
+5. (Optional) Enable post-processing to format transcripts
 
 ## Usage
 

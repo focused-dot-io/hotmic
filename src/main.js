@@ -151,10 +151,24 @@ function getHistory() {
 }
 
 /**
- * Post-Processing with Groq
+ * Post-Processing with LLM
  */
 async function postProcessTranscript(text) {
-  const apiKey = store.get('apiKey');
+  const apiProvider = store.get('apiProvider', 'groq');
+  let apiKey = null;
+  let baseUrl = '';
+  let model = '';
+
+  if (apiProvider === 'groq') {
+    apiKey = store.get('apiKey');
+    baseUrl = store.get('groqBaseUrl', 'https://api.groq.com/openai/v1');
+    model = 'llama-3.3-70b-versatile';
+  } else if (apiProvider === 'openai') {
+    apiKey = store.get('openaiApiKey');
+    baseUrl = store.get('openaiBaseUrl', 'https://api.openai.com/v1');
+    model = 'gpt-4o';
+  }
+
   if (!apiKey) {
     throw new Error('API key not set');
   }
@@ -169,16 +183,18 @@ async function postProcessTranscript(text) {
   }
 
   try {
-    updateTranscriptionProgress('processing', 'Post-processing with Groq...');
+    updateTranscriptionProgress('processing', `Post-processing with ${apiProvider === 'groq' ? 'Groq' : 'OpenAI'}...`);
 
-    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    const endpoint = `${baseUrl}/chat/completions`.replace(/([^:]\/)\/+/g, "$1");
+
+    const response = await fetch(endpoint, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${apiKey}`,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
+        model: model,
         messages: [
           {
             role: 'system',
@@ -196,7 +212,7 @@ async function postProcessTranscript(text) {
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
-      throw new Error(`Groq API error: ${response.statusText}${errorData.error ? ' - ' + errorData.error.message : ''}`);
+      throw new Error(`${apiProvider.toUpperCase()} API error: ${response.statusText}${errorData.error ? ' - ' + errorData.error.message : ''}`);
     }
 
     const data = await response.json();
@@ -211,9 +227,21 @@ async function postProcessTranscript(text) {
  * API and Transcription
  */
 async function transcribeAudio(audioBuffer) {
-  const apiKey = store.get('apiKey');
-  if (!apiKey) {
-    throw new Error('API key not set. Please configure in settings.');
+  const apiProvider = store.get('apiProvider', 'groq');
+  let apiKey = null;
+
+  if (apiProvider === 'groq') {
+    apiKey = store.get('apiKey');
+    if (!apiKey) {
+      throw new Error('Groq API key not set. Please configure in settings.');
+    }
+  } else if (apiProvider === 'openai') {
+    apiKey = store.get('openaiApiKey');
+    if (!apiKey) {
+      throw new Error('OpenAI API key not set. Please configure in settings.');
+    }
+  } else {
+    throw new Error('Invalid API provider selected.');
   }
 
   let tempFile = null;
@@ -224,10 +252,22 @@ async function transcribeAudio(audioBuffer) {
     tempFile = path.join(tempDir, `recording-${Date.now()}.wav`);
     fs.writeFileSync(tempFile, Buffer.from(audioBuffer));
 
-    updateTranscriptionProgress('api', 'Sending to Groq API...');
+    // Determine provider name for progress update
+    let providerName = '';
+    if (apiProvider === 'groq') providerName = 'Groq';
+    else if (apiProvider === 'openai') providerName = 'OpenAI';
 
-    // Send to Groq API for transcription
-    const rawTranscript = await sendToGroqAPI(apiKey, tempFile);
+    updateTranscriptionProgress('api', `Sending to ${providerName} API...`);
+
+    // Send to selected API for transcription
+    let rawTranscript;
+    if (apiProvider === 'groq') {
+      rawTranscript = await sendToGroqAPI(apiKey, tempFile);
+    } else if (apiProvider === 'openai') {
+      rawTranscript = await sendToOpenAIAPI(apiKey, tempFile);
+    } else {
+      throw new Error('Invalid API provider selected.');
+    }
 
     // If we get here and rawTranscript is empty, don't proceed
     if (!rawTranscript?.trim()) {
@@ -277,15 +317,98 @@ async function sendToGroqAPI(apiKey, audioFilePath) {
   // Create form data for API request
   const formData = new FormData();
   formData.append('file', fs.createReadStream(audioFilePath));
-  formData.append('model', 'whisper-large-v3');
+  formData.append('model', store.get('groqModel', 'whisper-large-v3'));
+
+  // Get the base URL from store
+  const baseUrl = new URL(store.get('groqBaseUrl', 'https://api.groq.com/openai/v1'));
 
   // Send request to Groq API
   const response = await new Promise((resolve, reject) => {
     const formHeaders = formData.getHeaders();
 
     const options = {
-      hostname: 'api.groq.com',
-      path: '/openai/v1/audio/transcriptions',
+      hostname: baseUrl.hostname,
+      path: `${baseUrl.pathname}/audio/transcriptions`.replace('//', '/'),
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        ...formHeaders
+      }
+    };
+
+    const req = https.request(options, (res) => {
+      let data = '';
+
+      res.on('data', (chunk) => {
+        data += chunk;
+        updateTranscriptionProgress('receiving', 'Receiving transcription...');
+      });
+
+      res.on('end', () => {
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          resolve({ ok: true, data });
+        } else {
+          console.error('API Error Response:', {
+            statusCode: res.statusCode,
+            data: data
+          });
+          resolve({ ok: false, statusCode: res.statusCode, data });
+        }
+      });
+    });
+
+    req.on('error', (error) => {
+      console.error('Request Error:', error);
+      reject(error);
+    });
+
+    formData.pipe(req);
+  });
+
+  if (!response.ok) {
+    console.error('API Error:', response.data);
+    throw new Error(`API error: ${response.data}`);
+  }
+
+  try {
+    const result = JSON.parse(response.data);
+    console.log('API Response:', result);
+
+    if (!result || typeof result !== 'object') {
+      throw new Error('Invalid API response format');
+    }
+
+    const transcript = result.text?.trim();
+    console.log('Extracted transcript:', transcript);
+
+    // If no transcript or empty transcript, throw error
+    if (!transcript) {
+      throw new Error('No speech detected in audio');
+    }
+
+    return transcript;
+  } catch (error) {
+    console.error('Error processing API response:', error);
+    throw new Error(`Failed to process API response: ${error.message}`);
+  }
+}
+
+async function sendToOpenAIAPI(apiKey, audioFilePath) {
+  // Create form data for API request
+  const formData = new FormData();
+  formData.append('file', fs.createReadStream(audioFilePath));
+  formData.append('model', store.get('openaiModel', 'whisper-large-v3'));
+
+  // Get the base URL from store
+  const baseUrl = new URL(store.get('openaiBaseUrl', 'https://api.openai.com/v1'));
+
+  // Send request to OpenAI API
+  const response = await new Promise((resolve, reject) => {
+    const formHeaders = formData.getHeaders();
+
+    const options = {
+      hostname: baseUrl.hostname,
+      path: `${baseUrl.pathname}/audio/transcriptions`.replace('//', '/'),
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${apiKey}`,
@@ -510,7 +633,17 @@ function setupIPCHandlers() {
     }
   });
 
-  // API key management
+  // API provider management
+  ipcMain.handle('set-api-provider', (event, provider) => {
+    store.set('apiProvider', provider);
+    return true;
+  });
+
+  ipcMain.handle('get-api-provider', () => {
+    return store.get('apiProvider', 'groq');
+  });
+
+  // Groq API configuration
   ipcMain.handle('set-api-key', (event, key) => {
     store.set('apiKey', key);
     return true;
@@ -518,6 +651,52 @@ function setupIPCHandlers() {
 
   ipcMain.handle('get-api-key', () => {
     return store.get('apiKey') || '';
+  });
+
+  ipcMain.handle('set-groq-base-url', (event, url) => {
+    store.set('groqBaseUrl', url);
+    return true;
+  });
+
+  ipcMain.handle('get-groq-base-url', () => {
+    return store.get('groqBaseUrl', 'https://api.groq.com/openai/v1') || '';
+  });
+
+  ipcMain.handle('set-groq-model', (event, model) => {
+    store.set('groqModel', model);
+    return true;
+  });
+
+  ipcMain.handle('get-groq-model', () => {
+    return store.get('groqModel', 'whisper-large-v3') || '';
+  });
+
+  // OpenAI API configuration
+  ipcMain.handle('set-openai-api-key', (event, key) => {
+    store.set('openaiApiKey', key);
+    return true;
+  });
+
+  ipcMain.handle('get-openai-api-key', () => {
+    return store.get('openaiApiKey') || '';
+  });
+
+  ipcMain.handle('set-openai-base-url', (event, url) => {
+    store.set('openaiBaseUrl', url);
+    return true;
+  });
+
+  ipcMain.handle('get-openai-base-url', () => {
+    return store.get('openaiBaseUrl', 'https://api.openai.com/v1') || '';
+  });
+
+  ipcMain.handle('set-openai-model', (event, model) => {
+    store.set('openaiModel', model);
+    return true;
+  });
+
+  ipcMain.handle('get-openai-model', () => {
+    return store.get('openaiModel', 'whisper-large-v3') || '';
   });
 
   // Shortcut management
@@ -694,11 +873,13 @@ function createMainWindow() {
   mainWindow = new BrowserWindow({
     width: 800,
     height: 600,
+    minWidth: 700,
+    minHeight: 500,
     webPreferences: {
       preload: path.join(__dirname, 'preload.mjs'),
       contextIsolation: true,
-      nodeIntegration: false,
       sandbox: false,
+      nodeIntegration: false
     },
     show: false,
     skipTaskbar: false,
@@ -738,9 +919,22 @@ function createMainWindow() {
   });
 
   mainWindow.once('ready-to-show', () => {
-    // Only show on first launch or if API key isn't set
-    if (!store.get('apiKey')) {
+    // Only show on first launch or if no API key is set
+    const apiProvider = store.get('apiProvider', 'groq');
+    let hasApiKey = false;
+
+    if (apiProvider === 'groq') {
+      hasApiKey = !!store.get('apiKey');
+    } else if (apiProvider === 'openai') {
+      hasApiKey = !!store.get('openaiApiKey');
+    }
+
+    if (!hasApiKey) {
       mainWindow.show();
+      // Show API Providers tab first if no API key
+      mainWindow.webContents.executeJavaScript(`
+        document.querySelector('[data-tab="api-providers"]').click();
+      `);
     }
   });
 

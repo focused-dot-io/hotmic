@@ -13,8 +13,25 @@ import { contextBridge, ipcRenderer } from 'electron';
  */
 contextBridge.exposeInMainWorld('api', {
   // Settings management
+  getApiProvider: () => ipcRenderer.invoke('get-api-provider'),
+  setApiProvider: (provider) => ipcRenderer.invoke('set-api-provider', provider),
+
+  // Groq API
   getApiKey: () => ipcRenderer.invoke('get-api-key'),
   setApiKey: (key) => ipcRenderer.invoke('set-api-key', key),
+  getGroqBaseUrl: () => ipcRenderer.invoke('get-groq-base-url'),
+  setGroqBaseUrl: (url) => ipcRenderer.invoke('set-groq-base-url', url),
+  getGroqModel: () => ipcRenderer.invoke('get-groq-model'),
+  setGroqModel: (model) => ipcRenderer.invoke('set-groq-model', model),
+
+  // OpenAI API
+  getOpenaiApiKey: () => ipcRenderer.invoke('get-openai-api-key'),
+  setOpenaiApiKey: (key) => ipcRenderer.invoke('set-openai-api-key', key),
+  getOpenaiBaseUrl: () => ipcRenderer.invoke('get-openai-base-url'),
+  setOpenaiBaseUrl: (url) => ipcRenderer.invoke('set-openai-base-url', url),
+  getOpenaiModel: () => ipcRenderer.invoke('get-openai-model'),
+  setOpenaiModel: (model) => ipcRenderer.invoke('set-openai-model', model),
+
   getShortcut: () => ipcRenderer.invoke('get-shortcut'),
   setShortcut: (shortcut) => ipcRenderer.invoke('set-shortcut', shortcut),
   getPromptSettings: () => ipcRenderer.invoke('get-prompt-settings'),
