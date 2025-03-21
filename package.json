@@ -45,16 +45,14 @@
       ]
     },
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "icon": "build/icon.ico"
     },
     "linux": {
       "target": "AppImage",
       "category": "Utility"
     }
   },
-  "os": [
-    "darwin"
-  ],
   "engines": {
     "node": ">=18.0.0"
   }

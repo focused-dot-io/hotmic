@@ -276,6 +276,47 @@ async function sendToGroqAPI(apiKey, audioFilePath) {
 }
 
 /**
+ * Platform-specific functionality
+ */
+const platformHandler = {
+  // Check if the app is showing in the dock/taskbar
+  isVisible: () => {
+    if (process.platform === 'darwin') {
+      return app.dock.isVisible();
+    } else {
+      // On Windows, use the store to track visibility state
+      return store.get('showInDock', true);
+    }
+  },
+  
+  // Show the app in the dock/taskbar
+  show: () => {
+    if (process.platform === 'darwin') {
+      app.dock.show();
+    } else {
+      // On Windows, update the store and make sure the window is shown in taskbar
+      store.set('showInDock', true);
+      if (mainWindow) {
+        mainWindow.setSkipTaskbar(false);
+      }
+    }
+  },
+  
+  // Hide the app from the dock/taskbar
+  hide: () => {
+    if (process.platform === 'darwin') {
+      app.dock.hide();
+    } else {
+      // On Windows, update the store and hide from taskbar
+      store.set('showInDock', false);
+      if (mainWindow) {
+        mainWindow.setSkipTaskbar(true);
+      }
+    }
+  }
+};
+
+/**
  * Tray Management
  */
 function createTray() {
@@ -292,8 +333,8 @@ function createTray() {
     // Create tray with template image
     tray = new Tray(trayIcon);
 
-    // Check if we're showing in the dock
-    const showingInDock = !app.dock.isVisible();
+    // Check if we're showing in the dock/taskbar
+    const showingInDock = platformHandler.isVisible();
 
     // Create context menu
     const contextMenu = Menu.buildFromTemplate([
@@ -313,12 +354,17 @@ function createTray() {
         }
       },
       { type: 'separator' },
-      {
+      ...(process.platform === 'darwin' ? [{
         label: 'Show in Dock',
         type: 'checkbox',
         checked: showingInDock,
         click: () => toggleDockVisibility()
-      },
+      }] : [{
+        label: 'Show in Taskbar',
+        type: 'checkbox',
+        checked: showingInDock,
+        click: () => toggleDockVisibility()
+      }]),
       { type: 'separator' },
       {
         label: 'Quit',
@@ -340,15 +386,15 @@ function createTray() {
  * Toggle dock visibility
  */
 function toggleDockVisibility() {
-  if (app.dock.isVisible()) {
-    app.dock.hide();
+  if (platformHandler.isVisible()) {
+    platformHandler.hide();
   } else {
-    app.dock.show();
+    platformHandler.show();
   }
 
   // Update the tray menu after toggling
   if (tray) {
-    const showingInDock = !app.dock.isVisible();
+    const showingInDock = platformHandler.isVisible();
     const contextMenu = Menu.buildFromTemplate([
       {
         label: 'Start/Stop Recording',
@@ -366,12 +412,17 @@ function toggleDockVisibility() {
         }
       },
       { type: 'separator' },
-      {
+      ...(process.platform === 'darwin' ? [{
         label: 'Show in Dock',
         type: 'checkbox',
         checked: showingInDock,
         click: () => toggleDockVisibility()
-      },
+      }] : [{
+        label: 'Show in Taskbar',
+        type: 'checkbox',
+        checked: showingInDock,
+        click: () => toggleDockVisibility()
+      }]),
       { type: 'separator' },
       {
         label: 'Quit',
@@ -510,9 +561,9 @@ async function initialize() {
   await app.whenReady();
 
   try {
-    // Hide dock only if not configured to show
+    // Hide dock/taskbar icon if not configured to show
     if (!store.get('showInDock', false)) {
-      app.dock.hide();
+      platformHandler.hide();
     }
 
     // Create main window first
@@ -522,7 +573,7 @@ async function initialize() {
     createTray();
 
     // Register global shortcut
-    const shortcut = store.get('shortcut') || 'Command+Shift+Space';
+    const shortcut = store.get('shortcut') || (process.platform === 'darwin' ? 'Command+Shift+Space' : 'Control+Shift+Space');
     globalShortcut.register(shortcut, toggleRecording);
 
     // Handle app activation
@@ -590,14 +641,14 @@ function createMainWindow() {
   // Show in App Switcher when window is shown
   mainWindow.on('show', () => {
     // Show in dock temporarily while window is open
-    app.dock.show();
+    platformHandler.show();
   });
 
   // Remove from App Switcher when window is hidden
   mainWindow.on('hide', () => {
     // Hide dock if it's not meant to be visible
-    if (!store.get('showInDock', false)) {
-      app.dock.hide();
+    if (!platformHandler.isVisible()) {
+      platformHandler.hide();
     }
   });
 
