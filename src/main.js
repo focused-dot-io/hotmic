@@ -7,9 +7,17 @@
  * - Communication with renderer processes
  * - Global shortcuts
  * - Tray icon
+ *
+ * CROSS-PLATFORM NOTES:
+ * This application supports both macOS and Windows, but some features are macOS-specific:
+ * - Dock icon management (show/hide in dock)
+ * - macOS-specific window styling (titleBarStyle, vibrancy, visualEffectState)
+ *
+ * All macOS-specific code is marked with "MACOS SPECIFIC" comments and guarded
+ * by the isMacOS constant (process.platform === 'darwin').
  */
 
-import { app, BrowserWindow, ipcMain, globalShortcut, Menu, Tray, clipboard, nativeImage, screen } from 'electron';
+import { app, BrowserWindow, ipcMain, globalShortcut, Menu, Tray, clipboard, nativeImage, screen, safeStorage } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import https from 'node:https';
@@ -23,6 +31,12 @@ import { fetch } from 'undici';
 // Fix __dirname and __filename which aren't available in ESM
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+/**
+ * Platform Detection
+ */
+// Detect if we're running on macOS
+const isMacOS = process.platform === 'darwin';
 
 /**
  * Application Configuration
@@ -52,19 +66,42 @@ let audioData = [];
  * History Management
  */
 function cleanupOldHistory() {
+  // Skip if history is disabled
+  if (!store.get('historyEnabled', true)) return [];
+
   const history = store.get('history', []);
   const thirtyDaysAgo = Date.now() - (30 * 24 * 60 * 60 * 1000);
   const newHistory = history.filter(item => item.timestamp > thirtyDaysAgo);
   store.set('history', newHistory);
+  return newHistory;
 }
 
 function addToHistory(rawText, processedText) {
+  // Skip if history is disabled
+  if (!store.get('historyEnabled', true)) return;
+
   const history = store.get('history', []);
+
+  // Encrypt the transcript data if encryption is available
+  let encryptedRawText = rawText;
+  let encryptedProcessedText = processedText;
+
+  if (safeStorage.isEncryptionAvailable()) {
+    try {
+      encryptedRawText = safeStorage.encryptString(rawText).toString('base64');
+      encryptedProcessedText = safeStorage.encryptString(processedText).toString('base64');
+    } catch (error) {
+      console.error('Error encrypting history data:', error);
+    }
+  }
+
   history.unshift({
     timestamp: Date.now(),
-    rawText,
-    processedText
+    rawText: encryptedRawText,
+    processedText: encryptedProcessedText,
+    encrypted: safeStorage.isEncryptionAvailable()
   });
+
   store.set('history', history);
 
   // Notify renderer of history update
@@ -75,17 +112,69 @@ function addToHistory(rawText, processedText) {
   cleanupOldHistory();
 }
 
+function clearHistory() {
+  store.set('history', []);
+  // Notify renderer of history update
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('history-updated');
+  }
+  return true;
+}
+
+function getHistory() {
+  const history = cleanupOldHistory();
+
+  // If encryption is available, decrypt the history items
+  if (safeStorage.isEncryptionAvailable()) {
+    return history.map(item => {
+      try {
+        if (item.encrypted) {
+          return {
+            timestamp: item.timestamp,
+            rawText: safeStorage.decryptString(Buffer.from(item.rawText, 'base64')),
+            processedText: safeStorage.decryptString(Buffer.from(item.processedText, 'base64'))
+          };
+        }
+        return item;
+      } catch (error) {
+        console.error('Error decrypting history item:', error);
+        return {
+          timestamp: item.timestamp,
+          rawText: 'Error: Could not decrypt transcript',
+          processedText: 'Error: Could not decrypt transcript'
+        };
+      }
+    });
+  }
+
+  return history;
+}
+
 /**
- * Post-Processing with Groq
+ * Post-Processing with LLM
  */
 async function postProcessTranscript(text) {
-  const apiKey = store.get('apiKey');
+  const apiProvider = store.get('apiProvider', 'groq');
+  let apiKey = null;
+  let baseUrl = '';
+  let model = '';
+
+  if (apiProvider === 'groq') {
+    apiKey = store.get('apiKey');
+    baseUrl = store.get('groqBaseUrl', 'https://api.groq.com/openai/v1');
+    model = 'llama-3.3-70b-versatile';
+  } else if (apiProvider === 'openai') {
+    apiKey = store.get('openaiApiKey');
+    baseUrl = store.get('openaiBaseUrl', 'https://api.openai.com/v1');
+    model = 'gpt-4o';
+  }
+
   if (!apiKey) {
     throw new Error('API key not set');
   }
 
   const promptSettings = store.get('promptSettings', {
-    enabled: true,
+    enabled: false,
     prompt: DEFAULT_PROMPT
   });
 
@@ -94,16 +183,18 @@ async function postProcessTranscript(text) {
   }
 
   try {
-    updateTranscriptionProgress('processing', 'Post-processing with Groq...');
+    updateTranscriptionProgress('processing', `Post-processing with ${apiProvider === 'groq' ? 'Groq' : 'OpenAI'}...`);
 
-    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    const endpoint = `${baseUrl}/chat/completions`.replace(/([^:]\/)\/+/g, "$1");
+
+    const response = await fetch(endpoint, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${apiKey}`,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
+        model: model,
         messages: [
           {
             role: 'system',
@@ -121,7 +212,7 @@ async function postProcessTranscript(text) {
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
-      throw new Error(`Groq API error: ${response.statusText}${errorData.error ? ' - ' + errorData.error.message : ''}`);
+      throw new Error(`${apiProvider.toUpperCase()} API error: ${response.statusText}${errorData.error ? ' - ' + errorData.error.message : ''}`);
     }
 
     const data = await response.json();
@@ -136,9 +227,21 @@ async function postProcessTranscript(text) {
  * API and Transcription
  */
 async function transcribeAudio(audioBuffer) {
-  const apiKey = store.get('apiKey');
-  if (!apiKey) {
-    throw new Error('API key not set. Please configure in settings.');
+  const apiProvider = store.get('apiProvider', 'groq');
+  let apiKey = null;
+
+  if (apiProvider === 'groq') {
+    apiKey = store.get('apiKey');
+    if (!apiKey) {
+      throw new Error('Groq API key not set. Please configure in settings.');
+    }
+  } else if (apiProvider === 'openai') {
+    apiKey = store.get('openaiApiKey');
+    if (!apiKey) {
+      throw new Error('OpenAI API key not set. Please configure in settings.');
+    }
+  } else {
+    throw new Error('Invalid API provider selected.');
   }
 
   let tempFile = null;
@@ -149,10 +252,22 @@ async function transcribeAudio(audioBuffer) {
     tempFile = path.join(tempDir, `recording-${Date.now()}.wav`);
     fs.writeFileSync(tempFile, Buffer.from(audioBuffer));
 
-    updateTranscriptionProgress('api', 'Sending to Groq API...');
+    // Determine provider name for progress update
+    let providerName = '';
+    if (apiProvider === 'groq') providerName = 'Groq';
+    else if (apiProvider === 'openai') providerName = 'OpenAI';
 
-    // Send to Groq API for transcription
-    const rawTranscript = await sendToGroqAPI(apiKey, tempFile);
+    updateTranscriptionProgress('api', `Sending to ${providerName} API...`);
+
+    // Send to selected API for transcription
+    let rawTranscript;
+    if (apiProvider === 'groq') {
+      rawTranscript = await sendToGroqAPI(apiKey, tempFile);
+    } else if (apiProvider === 'openai') {
+      rawTranscript = await sendToOpenAIAPI(apiKey, tempFile);
+    } else {
+      throw new Error('Invalid API provider selected.');
+    }
 
     // If we get here and rawTranscript is empty, don't proceed
     if (!rawTranscript?.trim()) {
@@ -202,15 +317,98 @@ async function sendToGroqAPI(apiKey, audioFilePath) {
   // Create form data for API request
   const formData = new FormData();
   formData.append('file', fs.createReadStream(audioFilePath));
-  formData.append('model', 'whisper-large-v3');
+  formData.append('model', store.get('groqModel', 'whisper-large-v3'));
+
+  // Get the base URL from store
+  const baseUrl = new URL(store.get('groqBaseUrl', 'https://api.groq.com/openai/v1'));
 
   // Send request to Groq API
   const response = await new Promise((resolve, reject) => {
     const formHeaders = formData.getHeaders();
 
     const options = {
-      hostname: 'api.groq.com',
-      path: '/openai/v1/audio/transcriptions',
+      hostname: baseUrl.hostname,
+      path: `${baseUrl.pathname}/audio/transcriptions`.replace('//', '/'),
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        ...formHeaders
+      }
+    };
+
+    const req = https.request(options, (res) => {
+      let data = '';
+
+      res.on('data', (chunk) => {
+        data += chunk;
+        updateTranscriptionProgress('receiving', 'Receiving transcription...');
+      });
+
+      res.on('end', () => {
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          resolve({ ok: true, data });
+        } else {
+          console.error('API Error Response:', {
+            statusCode: res.statusCode,
+            data: data
+          });
+          resolve({ ok: false, statusCode: res.statusCode, data });
+        }
+      });
+    });
+
+    req.on('error', (error) => {
+      console.error('Request Error:', error);
+      reject(error);
+    });
+
+    formData.pipe(req);
+  });
+
+  if (!response.ok) {
+    console.error('API Error:', response.data);
+    throw new Error(`API error: ${response.data}`);
+  }
+
+  try {
+    const result = JSON.parse(response.data);
+    console.log('API Response:', result);
+
+    if (!result || typeof result !== 'object') {
+      throw new Error('Invalid API response format');
+    }
+
+    const transcript = result.text?.trim();
+    console.log('Extracted transcript:', transcript);
+
+    // If no transcript or empty transcript, throw error
+    if (!transcript) {
+      throw new Error('No speech detected in audio');
+    }
+
+    return transcript;
+  } catch (error) {
+    console.error('Error processing API response:', error);
+    throw new Error(`Failed to process API response: ${error.message}`);
+  }
+}
+
+async function sendToOpenAIAPI(apiKey, audioFilePath) {
+  // Create form data for API request
+  const formData = new FormData();
+  formData.append('file', fs.createReadStream(audioFilePath));
+  formData.append('model', store.get('openaiModel', 'whisper-large-v3'));
+
+  // Get the base URL from store
+  const baseUrl = new URL(store.get('openaiBaseUrl', 'https://api.openai.com/v1'));
+
+  // Send request to OpenAI API
+  const response = await new Promise((resolve, reject) => {
+    const formHeaders = formData.getHeaders();
+
+    const options = {
+      hostname: baseUrl.hostname,
+      path: `${baseUrl.pathname}/audio/transcriptions`.replace('//', '/'),
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${apiKey}`,
@@ -292,11 +490,12 @@ function createTray() {
     // Create tray with template image
     tray = new Tray(trayIcon);
 
-    // Check if we're showing in the dock
-    const showingInDock = !app.dock.isVisible();
+    // MACOS SPECIFIC: Check dock visibility
+    // This is only available on macOS
+    const showingInDock = isMacOS && app.dock ? !app.dock.isVisible() : false;
 
-    // Create context menu
-    const contextMenu = Menu.buildFromTemplate([
+    // Create context menu items
+    const menuItems = [
       {
         label: 'Start/Stop Recording',
         click: toggleRecording
@@ -313,21 +512,30 @@ function createTray() {
         }
       },
       { type: 'separator' },
-      {
+    ];
+
+    // MACOS SPECIFIC: Add dock toggle option
+    // Only available on macOS
+    if (isMacOS) {
+      menuItems.push({
         label: 'Show in Dock',
         type: 'checkbox',
         checked: showingInDock,
         click: () => toggleDockVisibility()
-      },
-      { type: 'separator' },
-      {
-        label: 'Quit',
-        click: () => {
-          app.isQuitting = true;
-          app.quit();
-        }
+      });
+      menuItems.push({ type: 'separator' });
+    }
+
+    // Add quit option
+    menuItems.push({
+      label: 'Quit',
+      click: () => {
+        app.isQuitting = true;
+        app.quit();
       }
-    ]);
+    });
+
+    const contextMenu = Menu.buildFromTemplate(menuItems);
 
     tray.setToolTip('HotMic');
     tray.setContextMenu(contextMenu);
@@ -337,9 +545,13 @@ function createTray() {
 }
 
 /**
- * Toggle dock visibility
+ * Toggle dock visibility (MACOS SPECIFIC)
+ * This function only works on macOS and manages the app's visibility in the dock
  */
 function toggleDockVisibility() {
+  // Exit early if not on macOS
+  if (!isMacOS || !app.dock) return;
+
   if (app.dock.isVisible()) {
     app.dock.hide();
   } else {
@@ -348,8 +560,11 @@ function toggleDockVisibility() {
 
   // Update the tray menu after toggling
   if (tray) {
-    const showingInDock = !app.dock.isVisible();
-    const contextMenu = Menu.buildFromTemplate([
+    // MACOS SPECIFIC: Check dock visibility
+    const showingInDock = app.dock ? !app.dock.isVisible() : false;
+
+    // Create context menu items
+    const menuItems = [
       {
         label: 'Start/Stop Recording',
         click: toggleRecording
@@ -366,21 +581,29 @@ function toggleDockVisibility() {
         }
       },
       { type: 'separator' },
-      {
+    ];
+
+    // MACOS SPECIFIC: Add dock toggle option
+    if (isMacOS) {
+      menuItems.push({
         label: 'Show in Dock',
         type: 'checkbox',
         checked: showingInDock,
         click: () => toggleDockVisibility()
-      },
-      { type: 'separator' },
-      {
-        label: 'Quit',
-        click: () => {
-          app.isQuitting = true;
-          app.quit();
-        }
+      });
+      menuItems.push({ type: 'separator' });
+    }
+
+    // Add quit option
+    menuItems.push({
+      label: 'Quit',
+      click: () => {
+        app.isQuitting = true;
+        app.quit();
       }
-    ]);
+    });
+
+    const contextMenu = Menu.buildFromTemplate(menuItems);
     tray.setContextMenu(contextMenu);
   }
 }
@@ -410,7 +633,17 @@ function setupIPCHandlers() {
     }
   });
 
-  // API key management
+  // API provider management
+  ipcMain.handle('set-api-provider', (event, provider) => {
+    store.set('apiProvider', provider);
+    return true;
+  });
+
+  ipcMain.handle('get-api-provider', () => {
+    return store.get('apiProvider', 'groq');
+  });
+
+  // Groq API configuration
   ipcMain.handle('set-api-key', (event, key) => {
     store.set('apiKey', key);
     return true;
@@ -418,6 +651,52 @@ function setupIPCHandlers() {
 
   ipcMain.handle('get-api-key', () => {
     return store.get('apiKey') || '';
+  });
+
+  ipcMain.handle('set-groq-base-url', (event, url) => {
+    store.set('groqBaseUrl', url);
+    return true;
+  });
+
+  ipcMain.handle('get-groq-base-url', () => {
+    return store.get('groqBaseUrl', 'https://api.groq.com/openai/v1') || '';
+  });
+
+  ipcMain.handle('set-groq-model', (event, model) => {
+    store.set('groqModel', model);
+    return true;
+  });
+
+  ipcMain.handle('get-groq-model', () => {
+    return store.get('groqModel', 'whisper-large-v3') || '';
+  });
+
+  // OpenAI API configuration
+  ipcMain.handle('set-openai-api-key', (event, key) => {
+    store.set('openaiApiKey', key);
+    return true;
+  });
+
+  ipcMain.handle('get-openai-api-key', () => {
+    return store.get('openaiApiKey') || '';
+  });
+
+  ipcMain.handle('set-openai-base-url', (event, url) => {
+    store.set('openaiBaseUrl', url);
+    return true;
+  });
+
+  ipcMain.handle('get-openai-base-url', () => {
+    return store.get('openaiBaseUrl', 'https://api.openai.com/v1') || '';
+  });
+
+  ipcMain.handle('set-openai-model', (event, model) => {
+    store.set('openaiModel', model);
+    return true;
+  });
+
+  ipcMain.handle('get-openai-model', () => {
+    return store.get('openaiModel', 'whisper-large-v3') || '';
   });
 
   // Shortcut management
@@ -439,13 +718,15 @@ function setupIPCHandlers() {
   });
 
   ipcMain.handle('get-shortcut', () => {
-    return store.get('shortcut') || 'Command+Shift+Space';
+    // Use platform-specific default shortcuts
+    const defaultShortcut = isMacOS ? 'Command+Shift+Space' : 'Ctrl+Shift+Space';
+    return store.get('shortcut') || defaultShortcut;
   });
 
   // Prompt settings
   ipcMain.handle('get-prompt-settings', () => {
     return store.get('promptSettings', {
-      enabled: true,
+      enabled: false,
       prompt: DEFAULT_PROMPT
     });
   });
@@ -457,8 +738,27 @@ function setupIPCHandlers() {
 
   // History management
   ipcMain.handle('get-history', () => {
-    cleanupOldHistory();
-    return store.get('history', []);
+    return getHistory();
+  });
+
+  ipcMain.handle('clear-history', () => {
+    return clearHistory();
+  });
+
+  ipcMain.handle('is-history-encrypted', () => {
+    return safeStorage.isEncryptionAvailable();
+  });
+
+  ipcMain.handle('get-history-settings', () => {
+    return {
+      enabled: store.get('historyEnabled', true),
+      encrypted: safeStorage.isEncryptionAvailable()
+    };
+  });
+
+  ipcMain.handle('set-history-enabled', (event, enabled) => {
+    store.set('historyEnabled', enabled);
+    return true;
   });
 
   // Settings window management
@@ -510,8 +810,9 @@ async function initialize() {
   await app.whenReady();
 
   try {
-    // Hide dock only if not configured to show
-    if (!store.get('showInDock', false)) {
+    // MACOS SPECIFIC: Dock visibility management
+    // Hide dock icon if not configured to show (macOS only)
+    if (isMacOS && app.dock && !store.get('showInDock', false)) {
       app.dock.hide();
     }
 
@@ -572,16 +873,19 @@ function createMainWindow() {
   mainWindow = new BrowserWindow({
     width: 800,
     height: 600,
+    minWidth: 700,
+    minHeight: 500,
     webPreferences: {
       preload: path.join(__dirname, 'preload.mjs'),
       contextIsolation: true,
-      nodeIntegration: false,
       sandbox: false,
+      nodeIntegration: false
     },
     show: false,
     skipTaskbar: false,
     title: 'HotMic',
-    titleBarStyle: 'hiddenInset',
+    // MACOS SPECIFIC: titleBarStyle is only used on macOS
+    titleBarStyle: isMacOS ? 'hiddenInset' : 'default',
     backgroundColor: '#00000000'
   });
 
@@ -589,14 +893,18 @@ function createMainWindow() {
 
   // Show in App Switcher when window is shown
   mainWindow.on('show', () => {
-    // Show in dock temporarily while window is open
-    app.dock.show();
+    // MACOS SPECIFIC: Show in dock when window is shown
+    // On macOS, we show the app in the dock when the settings window is open
+    if (isMacOS && app.dock && store.get('showInDock', false)) {
+      app.dock.show();
+    }
   });
 
   // Remove from App Switcher when window is hidden
   mainWindow.on('hide', () => {
-    // Hide dock if it's not meant to be visible
-    if (!store.get('showInDock', false)) {
+    // MACOS SPECIFIC: Hide dock when window is hidden
+    // On macOS, we hide the dock icon when the window is hidden (unless configured to show)
+    if (isMacOS && app.dock && !store.get('showInDock', false)) {
       app.dock.hide();
     }
   });
@@ -611,9 +919,22 @@ function createMainWindow() {
   });
 
   mainWindow.once('ready-to-show', () => {
-    // Only show on first launch or if API key isn't set
-    if (!store.get('apiKey')) {
+    // Only show on first launch or if no API key is set
+    const apiProvider = store.get('apiProvider', 'groq');
+    let hasApiKey = false;
+
+    if (apiProvider === 'groq') {
+      hasApiKey = !!store.get('apiKey');
+    } else if (apiProvider === 'openai') {
+      hasApiKey = !!store.get('openaiApiKey');
+    }
+
+    if (!hasApiKey) {
       mainWindow.show();
+      // Show API Providers tab first if no API key
+      mainWindow.webContents.executeJavaScript(`
+        document.querySelector('[data-tab="api-providers"]').click();
+      `);
     }
   });
 
@@ -636,6 +957,7 @@ function createOverlayWindow() {
     x: Math.floor(width / 2 - 150),
     y: Math.floor(height / 2 - 150),
     frame: false,
+    // Note: transparent works on both platforms but has better results on macOS
     transparent: true,
     backgroundColor: '#00000000',
     opacity: 1.0,
@@ -644,9 +966,8 @@ function createOverlayWindow() {
     skipTaskbar: true,
     alwaysOnTop: true,
     show: false,
-    frame: false,
-    vibrancy: null,
-    visualEffectState: 'active',
+    vibrancy: isMacOS ? null : undefined,
+    visualEffectState: isMacOS ? 'active' : undefined,
     webPreferences: {
       preload: path.join(__dirname, 'preload.mjs'),
       contextIsolation: true,

@@ -415,6 +415,7 @@
       text-overflow: ellipsis;
       display: -webkit-box;
       -webkit-line-clamp: 2;
+      line-clamp: 2;
       -webkit-box-orient: vertical;
     }
 
@@ -534,6 +535,17 @@
       cursor: not-allowed;
       pointer-events: none;
     }
+
+    button.danger {
+      background: #ff3b30;
+      border-color: #ff3b30;
+      color: white;
+      font-weight: 600;
+    }
+
+    button.danger:hover {
+      filter: brightness(1.1);
+    }
   </style>
 </head>
 
@@ -542,6 +554,7 @@
     <!-- Tab Navigation -->
     <nav class="tab-nav">
       <button class="tab-button active" data-tab="general">General</button>
+      <button class="tab-button" data-tab="api-providers">API Providers</button>
       <button class="tab-button" data-tab="transcription">Transcription</button>
       <button class="tab-button" data-tab="history">History</button>
     </nav>
@@ -573,29 +586,96 @@
             <li>Press the global shortcut to show the recording overlay</li>
             <li>Speak into your microphone</li>
             <li>Press the shortcut again to stop recording</li>
-            <li>Wait for transcription and processing</li>
-            <li>Processed text will be copied to clipboard</li>
+            <li>Wait for transcription</li>
+            <li>The transcribed text will be copied to your clipboard</li>
+            <li>If post-processing is enabled, you'll get the formatted text; otherwise, you'll get the raw transcript</li>
           </ol>
+          <p style="margin-top: var(--spacing-sm); color: var(--secondary-text); font-size: 13px;"><strong>Note:</strong> An API key is required for the application to work. Post-processing (text formatting) is optional and can be enabled or disabled.</p>
+        </div>
+      </div>
+
+      <!-- API Providers Tab -->
+      <div class="tab-panel" id="api-providers-panel">
+        <div class="form-group">
+          <h3>Speech-to-Text Provider</h3>
+          <div class="provider-select" style="margin-bottom: var(--spacing-md);">
+            <label for="apiProvider">Active Provider:</label>
+            <select id="apiProvider" style="width: 100%; padding: var(--spacing-sm); background: var(--input-background); border: 1px solid var(--control-border); border-radius: var(--radius-sm); color: var(--text);">
+              <option value="groq">Groq API</option>
+              <option value="openai">OpenAI API</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Groq API Configuration -->
+        <div id="groqApiSection" class="form-group">
+          <h3>Groq API Configuration</h3>
+          <div style="margin-bottom: var(--spacing-md);">
+            <label for="groqBaseUrl">API Base URL:</label>
+            <input type="text" id="groqBaseUrl" placeholder="https://api.groq.com/openai/v1" value="https://api.groq.com/openai/v1">
+          </div>
+          <div style="margin-bottom: var(--spacing-md);">
+            <label for="apiKey">API Key:</label>
+            <div style="display: flex; gap: var(--spacing-sm);">
+              <input type="password" id="apiKey" placeholder="Enter your Groq API key">
+              <button id="saveApiKey" class="primary">Save</button>
+            </div>
+          </div>
+          <div style="margin-bottom: var(--spacing-md);">
+            <label for="groqModel">Model:</label>
+            <select id="groqModel" style="width: 100%; padding: var(--spacing-sm); background: var(--input-background); border: 1px solid var(--control-border); border-radius: var(--radius-sm); color: var(--text);">
+              <option value="whisper-large-v3">whisper-large-v3</option>
+            </select>
+          </div>
+          <div class="api-note" style="margin: var(--spacing-sm) 0; color: var(--secondary-text); font-size: 13px;">
+            <strong>Note:</strong> The Groq API key is required for Groq API transcriptions.
+          </div>
+          <div id="apiKeyStatus" class="status"></div>
+        </div>
+
+        <!-- OpenAI API Configuration -->
+        <div id="openaiApiSection" class="form-group" style="display: none;">
+          <h3>OpenAI API Configuration</h3>
+          <div style="margin-bottom: var(--spacing-md);">
+            <label for="openaiBaseUrl">API Base URL:</label>
+            <input type="text" id="openaiBaseUrl" placeholder="https://api.openai.com/v1" value="https://api.openai.com/v1">
+          </div>
+          <div style="margin-bottom: var(--spacing-md);">
+            <label for="openaiApiKey">API Key:</label>
+            <div style="display: flex; gap: var(--spacing-sm);">
+              <input type="password" id="openaiApiKey" placeholder="Enter your OpenAI API key">
+              <button id="saveOpenaiApiKey" class="primary">Save</button>
+            </div>
+          </div>
+          <div style="margin-bottom: var(--spacing-md);">
+            <label for="openaiModel">Model:</label>
+            <select id="openaiModel" style="width: 100%; padding: var(--spacing-sm); background: var(--input-background); border: 1px solid var(--control-border); border-radius: var(--radius-sm); color: var(--text);">
+              <option value="gpt-4o-transcribe">gpt-4o-transcribe</option>
+              <option value="gpt-4o-mini-transcribe">gpt-4o-mini-transcribe</option>
+              <option value="whisper-large-v2">whisper-large-v2</option>
+              <option value="whisper-large-v3">whisper-large-v3</option>
+            </select>
+          </div>
+          <div class="api-note" style="margin: var(--spacing-sm) 0; color: var(--secondary-text); font-size: 13px;">
+            <strong>Note:</strong> The OpenAI API key is required for OpenAI API transcriptions.
+          </div>
+          <div id="openaiApiKeyStatus" class="status"></div>
         </div>
       </div>
 
       <!-- Transcription Tab -->
       <div class="tab-panel" id="transcription-panel">
         <div class="form-group">
-          <h3>API Configuration</h3>
-          <label for="apiKey">Groq API Key:</label>
-          <div style="display: flex; gap: var(--spacing-sm);">
-            <input type="password" id="apiKey" placeholder="Enter your Groq API key">
-            <button id="saveApiKey" class="primary">Save</button>
-          </div>
-          <div id="apiKeyStatus" class="status"></div>
-        </div>
-
-        <div class="form-group">
           <h3>Post-Processing</h3>
           <div class="checkbox-group">
-            <input type="checkbox" id="enablePostProcessing" checked>
-            <label for="enablePostProcessing">Enable post-processing with Groq LLM</label>
+            <input type="checkbox" id="enablePostProcessing">
+            <label for="enablePostProcessing">Enable post-processing with LLM</label>
+          </div>
+          <div class="description-box" style="margin: var(--spacing-sm) 0; padding: var(--spacing-sm); background: rgba(0, 0, 0, 0.05); border-radius: var(--radius-sm); font-size: 13px;">
+            <strong>What is post-processing?</strong>
+            <p>Post-processing is an optional feature that enhances your transcription. The basic transcription already provides the raw text from the Whisper model.</p>
+            <p>When post-processing is enabled, your raw transcript is sent to the selected provider's LLM with the prompt below to format and enhance it. The processed version is what gets copied to your clipboard, not the raw transcript.</p>
+            <p>To get the raw transcript instead, either disable post-processing or modify the prompt to: "Return the transcript exactly as provided with no changes."</p>
           </div>
           <div id="promptSection">
             <label for="prompt">Processing Prompt:</label>
@@ -611,6 +691,16 @@
       <div class="tab-panel" id="history-panel">
         <div class="history-layout">
           <div class="history-sidebar">
+            <div class="history-controls" style="padding: var(--spacing-md); display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--separator);">
+              <div class="checkbox-group">
+                <input type="checkbox" id="historyEnabled" checked>
+                <label for="historyEnabled">Enable History</label>
+              </div>
+              <button id="clearHistory" class="danger">Clear History</button>
+            </div>
+            <div class="history-encryption-status" style="padding: var(--spacing-sm) var(--spacing-md); font-size: 12px; color: var(--secondary-text); display: flex; align-items: center; gap: var(--spacing-xs); border-bottom: 1px solid var(--separator);">
+              <span id="encryptionStatus"></span>
+            </div>
             <div class="history-list" id="historyList">
               <!-- History items will be inserted here -->
             </div>
@@ -625,7 +715,7 @@
     </div>
 
     <footer>
-      <p>HotMic v1.0.0</p>
+      <p>HotMic v0.0.2</p>
     </footer>
   </div>
 
@@ -636,10 +726,24 @@
 
     // Application references
     const elements = {
-      // API Key elements
+      // API Provider elements
+      apiProvider: document.getElementById('apiProvider'),
+      groqApiSection: document.getElementById('groqApiSection'),
+      openaiApiSection: document.getElementById('openaiApiSection'),
+
+      // Groq API elements
+      groqBaseUrl: document.getElementById('groqBaseUrl'),
+      groqModel: document.getElementById('groqModel'),
       apiKeyInput: document.getElementById('apiKey'),
       saveApiKeyBtn: document.getElementById('saveApiKey'),
       apiKeyStatus: document.getElementById('apiKeyStatus'),
+
+      // OpenAI API elements
+      openaiBaseUrl: document.getElementById('openaiBaseUrl'),
+      openaiModel: document.getElementById('openaiModel'),
+      openaiApiKeyInput: document.getElementById('openaiApiKey'),
+      saveOpenaiApiKeyBtn: document.getElementById('saveOpenaiApiKey'),
+      openaiApiKeyStatus: document.getElementById('openaiApiKeyStatus'),
 
       // Shortcut elements
       currentShortcut: document.getElementById('currentShortcut'),
@@ -654,13 +758,20 @@
       enablePostProcessing: document.getElementById('enablePostProcessing'),
       prompt: document.getElementById('prompt'),
       resetPrompt: document.getElementById('resetPrompt'),
-      promptStatus: document.getElementById('promptStatus')
+      promptStatus: document.getElementById('promptStatus'),
+
+      // History elements
+      historyEnabled: document.getElementById('historyEnabled'),
+      clearHistory: document.getElementById('clearHistory'),
+      encryptionStatus: document.getElementById('encryptionStatus'),
+      historyList: document.getElementById('historyList')
     };
 
     // Application state
     const state = {
       keys: new Set(),
-      listeningForShortcut: false
+      listeningForShortcut: false,
+      apiProvider: 'groq' // Default provider
     };
 
     /**
@@ -670,12 +781,58 @@
     // Load settings from store
     async function loadSettings() {
       try {
+        await loadApiProvider();
         await loadApiKey();
+        await loadOpenaiApiKey();
+        await loadBaseUrls();
+        await loadModels();
         await loadShortcut();
         await loadPromptSettings();
+        await loadHistorySettings();
         await loadHistory();
       } catch (error) {
         console.error('Error loading settings:', error);
+      }
+    }
+
+    // Load API provider from store
+    async function loadApiProvider() {
+      const provider = await window.api.getApiProvider();
+      if (provider) {
+        elements.apiProvider.value = provider;
+        state.apiProvider = provider;
+        updateApiSectionVisibility();
+      }
+    }
+
+    // Load base URLs from store
+    async function loadBaseUrls() {
+      const groqBaseUrl = await window.api.getGroqBaseUrl();
+      if (groqBaseUrl) {
+        elements.groqBaseUrl.value = groqBaseUrl;
+      }
+
+      const openaiBaseUrl = await window.api.getOpenaiBaseUrl();
+      if (openaiBaseUrl) {
+        elements.openaiBaseUrl.value = openaiBaseUrl;
+      }
+
+    }
+
+    // Load models from store
+    async function loadModels() {
+      try {
+        const groqModel = await window.api.getGroqModel();
+        if (groqModel) {
+          elements.groqModel.value = groqModel;
+        }
+
+        const openaiModel = await window.api.getOpenaiModel();
+        if (openaiModel) {
+          elements.openaiModel.value = openaiModel;
+        }
+      } catch (error) {
+        console.error('Error loading models:', error);
       }
     }
 
@@ -685,6 +842,29 @@
       if (apiKey) {
         elements.apiKeyInput.value = apiKey;
         showStatus(elements.apiKeyStatus, 'API key is set', 'success');
+      }
+    }
+
+    // Load OpenAI API key from store
+    async function loadOpenaiApiKey() {
+      const apiKey = await window.api.getOpenaiApiKey();
+      if (apiKey) {
+        elements.openaiApiKeyInput.value = apiKey;
+        showStatus(elements.openaiApiKeyStatus, 'API key is set', 'success');
+      }
+    }
+
+    // Update API section visibility based on selected provider
+    function updateApiSectionVisibility() {
+      // Hide all sections first
+      elements.groqApiSection.style.display = 'none';
+      elements.openaiApiSection.style.display = 'none';
+
+      // Show selected provider section
+      if (state.apiProvider === 'groq') {
+        elements.groqApiSection.style.display = 'block';
+      } else if (state.apiProvider === 'openai') {
+        elements.openaiApiSection.style.display = 'block';
       }
     }
 
@@ -718,17 +898,42 @@
     // Save API key to store
     async function saveApiKey() {
       const apiKey = elements.apiKeyInput.value.trim();
-
-      if (!apiKey) {
-        showStatus(elements.apiKeyStatus, 'Please enter an API key', 'error');
-        return;
-      }
+      const baseUrl = elements.groqBaseUrl.value.trim();
+      const model = elements.groqModel.value;
 
       try {
         await window.api.setApiKey(apiKey);
-        showStatus(elements.apiKeyStatus, 'API key saved successfully', 'success');
+        await window.api.setGroqBaseUrl(baseUrl);
+        await window.api.setGroqModel(model);
+
+        if (apiKey) {
+          showStatus(elements.apiKeyStatus, 'Settings saved successfully', 'success');
+        } else {
+          showStatus(elements.apiKeyStatus, 'API key removed', 'success');
+        }
       } catch (error) {
-        showStatus(elements.apiKeyStatus, `Error saving API key: ${error.message}`, 'error');
+        showStatus(elements.apiKeyStatus, `Error saving settings: ${error.message}`, 'error');
+      }
+    }
+
+    // Save OpenAI API key to store
+    async function saveOpenaiApiKey() {
+      const apiKey = elements.openaiApiKeyInput.value.trim();
+      const baseUrl = elements.openaiBaseUrl.value.trim();
+      const model = elements.openaiModel.value;
+
+      try {
+        await window.api.setOpenaiApiKey(apiKey);
+        await window.api.setOpenaiBaseUrl(baseUrl);
+        await window.api.setOpenaiModel(model);
+
+        if (apiKey) {
+          showStatus(elements.openaiApiKeyStatus, 'Settings saved successfully', 'success');
+        } else {
+          showStatus(elements.openaiApiKeyStatus, 'API key removed', 'success');
+        }
+      } catch (error) {
+        showStatus(elements.openaiApiKeyStatus, `Error saving settings: ${error.message}`, 'error');
       }
     }
 
@@ -892,8 +1097,12 @@
     // Load and display history
     async function loadHistory() {
       const history = await window.api.getHistory();
-      const historyList = document.getElementById('historyList');
-      historyList.innerHTML = '';
+      elements.historyList.innerHTML = '';
+
+      if (history.length === 0) {
+        elements.historyList.innerHTML = '<div style="padding: var(--spacing-md); color: var(--secondary-text);">No history items</div>';
+        return;
+      }
 
       history.forEach(item => {
         const div = document.createElement('div');
@@ -908,7 +1117,7 @@
           <div class="preview">${preview.substring(0, 100)}${preview.length > 100 ? '...' : ''}</div>
         `;
 
-        historyList.appendChild(div);
+        elements.historyList.appendChild(div);
       });
     }
 
@@ -942,6 +1151,24 @@
       }
     }
 
+    // Load history settings
+    async function loadHistorySettings() {
+      try {
+        const settings = await window.api.getHistorySettings();
+        elements.historyEnabled.checked = settings.enabled;
+
+        // Update encryption status
+        const isEncrypted = await window.api.isHistoryEncrypted();
+        if (isEncrypted) {
+          elements.encryptionStatus.innerHTML = '🔒 History is encrypted';
+        } else {
+          elements.encryptionStatus.innerHTML = '⚠️ History is not encrypted';
+        }
+      } catch (error) {
+        console.error('Error loading history settings:', error);
+      }
+    }
+
     /**
      * UI Helpers
      */
@@ -953,31 +1180,65 @@
     }
 
     /**
-     * Event Binding
+     * Event Listeners
      */
+    function setupEventListeners() {
+      // Tab navigation
+      const tabButtons = document.querySelectorAll('.tab-button');
+      const tabPanels = document.querySelectorAll('.tab-panel');
 
-    // Bind all event listeners
-    function bindEventListeners() {
+      tabButtons.forEach(button => {
+        button.addEventListener('click', () => {
+          const tabId = button.getAttribute('data-tab');
+
+          // Update active tab button
+          tabButtons.forEach(btn => btn.classList.remove('active'));
+          button.classList.add('active');
+
+          // Show selected tab panel
+          tabPanels.forEach(panel => panel.style.display = 'none');
+          document.getElementById(`${tabId}-panel`).style.display = 'block';
+        });
+      });
+
+      // Provider selection
+      elements.apiProvider.addEventListener('change', function() {
+        state.apiProvider = this.value;
+        window.api.setApiProvider(this.value);
+        updateApiSectionVisibility();
+      });
+
       // API Key events
       elements.saveApiKeyBtn.addEventListener('click', saveApiKey);
+      elements.saveOpenaiApiKeyBtn.addEventListener('click', saveOpenaiApiKey);
+
+      // Model and URL changes
+      elements.groqBaseUrl.addEventListener('change', () => elements.saveApiKeyBtn.click());
+      elements.groqModel.addEventListener('change', () => elements.saveApiKeyBtn.click());
+
+      elements.openaiBaseUrl.addEventListener('change', () => elements.saveOpenaiApiKeyBtn.click());
+      elements.openaiModel.addEventListener('change', () => elements.saveOpenaiApiKeyBtn.click());
 
       // Shortcut events
       elements.editShortcut.addEventListener('click', startShortcutListener);
-      elements.cancelShortcut.addEventListener('click', cancelShortcutChange);
       elements.saveShortcut.addEventListener('click', saveShortcut);
+      elements.cancelShortcut.addEventListener('click', cancelShortcutChange);
 
-      // Key events for shortcut recording
+      // Setup key event listeners for capturing shortcut
       document.addEventListener('keydown', handleKeyDown);
       document.addEventListener('keyup', handleKeyUp);
 
-      // Post-processing settings
+      // Post-processing events
       elements.enablePostProcessing.addEventListener('change', () => {
         updatePromptSectionState();
         savePromptSettings();
       });
-
       elements.prompt.addEventListener('change', savePromptSettings);
       elements.resetPrompt.addEventListener('click', resetPrompt);
+
+      // History events
+      elements.historyEnabled.addEventListener('change', toggleHistoryEnabled);
+      elements.clearHistory.addEventListener('click', clearHistoryConfirm);
 
       // Error handling
       window.api.onShortcutError && window.api.onShortcutError((message) => {
@@ -985,34 +1246,44 @@
       });
     }
 
-    // Add tab switching logic
-    function setupTabs() {
-      const tabButtons = document.querySelectorAll('.tab-button');
-
-      tabButtons.forEach(button => {
-        button.addEventListener('click', () => {
-          // Remove active class from all buttons and panels
-          tabButtons.forEach(btn => btn.classList.remove('active'));
-          document.querySelectorAll('.tab-panel').forEach(panel => panel.classList.remove('active'));
-
-          // Add active class to clicked button and corresponding panel
-          button.classList.add('active');
-          document.getElementById(`${button.dataset.tab}-panel`).classList.add('active');
-        });
-      });
-    }
-
     // Initialize when DOM is loaded
     document.addEventListener('DOMContentLoaded', () => {
       loadSettings();
-      bindEventListeners();
-      setupTabs();
+      setupEventListeners();
 
       // Listen for history updates
       window.api.onHistoryUpdate(() => {
         loadHistory();
       });
     });
+
+    // Toggle history enabled setting
+    async function toggleHistoryEnabled() {
+      try {
+        await window.api.setHistoryEnabled(elements.historyEnabled.checked);
+        // Reload history if enabled
+        if (elements.historyEnabled.checked) {
+          await loadHistory();
+        } else {
+          // Clear display but not actual history
+          elements.historyList.innerHTML = '<div style="padding: var(--spacing-md); color: var(--secondary-text);">History is disabled</div>';
+        }
+      } catch (error) {
+        console.error('Error saving history settings:', error);
+      }
+    }
+
+    // Show confirmation before clearing history
+    async function clearHistoryConfirm() {
+      if (confirm('Are you sure you want to clear all history? This cannot be undone.')) {
+        try {
+          await window.api.clearHistory();
+          await loadHistory();
+        } catch (error) {
+          console.error('Error clearing history:', error);
+        }
+      }
+    }
   </script>
 </body>
 
